@@ -1,0 +1,41 @@
+# Node.js
+node_modules/
+.env
+.env.*
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+/dist
+/build
+
+# Uploads and generated files
+uploads/
+*.sqlite
+*.sqlite3
+*.db
+*.pid
+
+# Coverage
+coverage/
+
+# Misc
+*.tgz
+.idea/
+.vscode/
+
+# Ignore Whisper/ffmpeg outputs
+*.wav
+*.mp3
+*.txt
+*.srt
+*.whisper* 
