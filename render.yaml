@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: 10x-finale
+    env: node
+    plan: free
+    buildCommand: 'npm install'
+    startCommand: 'node server.js'
+    envVars:
+      - key: NODE_VERSION
+        value: 18
+    autoDeploy: true
+    env: 
+      - key: PORT
+        value: 4000
+    healthCheckPath: / 
