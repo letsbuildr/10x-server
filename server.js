@@ -270,7 +270,7 @@ app.post("/scheduled/:id/cancel", async (req, res) => {
   }
 });
 
-// Backend-only service - no static file serving
+// Mobile API service - no static file serving
 // app.use(express.static("public"));
 // app.use("/uploads", express.static("uploads"));
 
@@ -934,9 +934,14 @@ async function uploadToLinkedIn(filePath, caption, cloudinaryUrl) {
 }
 
 // Routes
-// Backend-only service - no frontend routes
+// Mobile API service - no frontend routes
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  res.json({
+    message: "10X Social Media Distributor API",
+    version: "1.0.0",
+    status: "running",
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.get("/debug", (req, res) => {
@@ -961,6 +966,24 @@ app.get("/test", (req, res) => {
   res.json({
     message: "Server is working!",
     timestamp: new Date().toISOString(),
+    mobileApi: true,
+    version: "1.0.0"
+  });
+});
+
+// Mobile app health check endpoint
+app.get("/health", (req, res) => {
+  res.json({
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+    services: {
+      mongodb: mongoose.connection.readyState === 1,
+      cloudinary: !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY),
+      gemini: !!process.env.GEMINI_API_KEY,
+      tiktok: fs.existsSync("tiktok_token.txt"),
+      twitter: !!(process.env.TWITTER_API_KEY && process.env.TWITTER_API_SECRET),
+      linkedin: !!process.env.LINKEDIN_ACCESS_TOKEN
+    }
   });
 });
 
@@ -1004,7 +1027,329 @@ app.post("/upload", upload.single("video"), (req, res) => {
     message: "Video uploaded successfully",
     filename: req.file.filename,
     filepath: req.file.path,
+    size: req.file.size,
+    mimetype: req.file.mimetype
   });
+});
+
+// Mobile-specific upload endpoint with better error handling
+app.post("/mobile/upload", upload.single("video"), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ 
+        success: false,
+        error: "No video file uploaded" 
+      });
+    }
+
+    // Validate file type
+    if (!req.file.mimetype.startsWith('video/')) {
+      return res.status(400).json({ 
+        success: false,
+        error: "Invalid file type. Only video files are allowed." 
+      });
+    }
+
+    // Validate file size (100MB limit)
+    const maxSize = 100 * 1024 * 1024; // 100MB
+    if (req.file.size > maxSize) {
+      return res.status(400).json({ 
+        success: false,
+        error: "File too large. Maximum size is 100MB." 
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Video uploaded successfully",
+      filename: req.file.filename,
+      filepath: req.file.path,
+      size: req.file.size,
+      mimetype: req.file.mimetype,
+      originalName: req.file.originalname
+    });
+  } catch (error) {
+    console.error('Mobile upload error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: "Upload failed. Please try again." 
+    });
+  }
+});
+
+// Mobile-specific distribution endpoint
+app.post("/mobile/distribute", async (req, res) => {
+  if (isUploading) {
+    return res.status(423).json({ 
+      success: false,
+      error: "Upload in progress. Please wait." 
+    });
+  }
+
+  const { filename, caption, processTranscript, platforms, scheduleTime } = req.body;
+
+  if (!filename) {
+    return res.status(400).json({ 
+      success: false,
+      error: "No filename provided" 
+    });
+  }
+
+  if (!platforms || !Array.isArray(platforms) || platforms.length === 0) {
+    return res.status(400).json({ 
+      success: false,
+      error: "No platforms selected" 
+    });
+  }
+
+  const filePath = path.join(__dirname, "uploads", filename);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ 
+      success: false,
+      error: "Video file not found" 
+    });
+  }
+
+  isUploading = true;
+
+  try {
+    console.log("🚀 Starting mobile distribution to selected platforms:", platforms);
+
+    let platformCaptions = {
+      facebook: caption,
+      instagram: caption,
+      tiktok: caption,
+      twitter: caption,
+      linkedin: caption,
+    };
+
+    // If transcript processing is enabled, generate content for each platform
+    if (processTranscript) {
+      console.log("🎯 Processing transcript and generating content...");
+
+      try {
+        const transcriptResponse = await axios.post(
+          `${req.protocol}://${req.get("host")}/process-transcript`,
+          {
+            filename: filename,
+          }
+        );
+
+        if (transcriptResponse.data.success) {
+          const generatedContent = transcriptResponse.data.content;
+          platformCaptions = {
+            facebook: generatedContent.facebook || caption,
+            instagram: generatedContent.instagram || caption,
+            tiktok: generatedContent.tiktok || caption,
+            twitter: generatedContent.twitter || caption,
+            linkedin: generatedContent.linkedin || caption,
+          };
+          console.log("✅ Content generated successfully for all platforms");
+        } else {
+          console.warn("⚠️ Content generation failed, using original caption");
+        }
+      } catch (transcriptError) {
+        console.error(
+          "❌ Transcript processing error:",
+          transcriptError.message
+        );
+        console.warn("⚠️ Using original caption for all platforms");
+      }
+    }
+
+    // Upload to Cloudinary once if needed
+    let cloudinaryResult = null;
+    if (
+      platforms.some((p) => ["facebook", "instagram", "linkedin"].includes(p))
+    ) {
+      cloudinaryResult = await uploadToCloudinary(filePath);
+      if (!cloudinaryResult.success) {
+        throw new Error(`Cloudinary upload failed: ${cloudinaryResult.error}`);
+      }
+    }
+
+    // Extract hashtags from caption (simple regex)
+    function extractHashtags(text) {
+      return (text.match(/#\w+/g) || []).map((tag) => tag.toLowerCase());
+    }
+    const hashtags = extractHashtags(caption);
+
+    // Save to MongoDB if scheduled
+    if (scheduleTime) {
+      const scheduleDate = new Date(scheduleTime);
+      if (isNaN(scheduleDate) || scheduleDate <= new Date()) {
+        return res.status(400).json({ 
+          success: false,
+          error: "Invalid or past schedule time" 
+        });
+      }
+
+      // Save scheduled post to MongoDB
+      const scheduledDoc = await ScheduledPost.create({
+        filename,
+        caption,
+        cloudinaryUrl: cloudinaryResult?.url || null,
+        platforms,
+        hashtags,
+        scheduledTime: scheduleDate,
+        status: "pending",
+        generatedContent: platformCaptions,
+      });
+
+      const taskId = `task_${Date.now()}_${Math.random()
+        .toString(36)
+        .substring(2)}`;
+      const cronTime = `${scheduleDate.getSeconds()} ${scheduleDate.getMinutes()} ${scheduleDate.getHours()} ${scheduleDate.getDate()} ${
+        scheduleDate.getMonth() + 1
+      } *`;
+
+      scheduledTasks.set(taskId, {
+        filename,
+        caption,
+        platforms,
+        platformCaptions,
+        filePath,
+      });
+
+      cron.schedule(cronTime, async () => {
+        console.log(
+          `📅 Executing scheduled task ${taskId} for platforms: ${platforms.join(
+            ", "
+          )}`
+        );
+        const results = {};
+
+        for (const platform of platforms) {
+          console.log(`📤 Uploading to ${platform}...`);
+          if (platform === "facebook") {
+            results.facebook = await uploadToFacebook(
+              filePath,
+              platformCaptions.facebook,
+              cloudinaryResult?.url
+            );
+            await notifyWhatsAppOnSuccess(scheduledDoc, 'Facebook', results.facebook);
+          } else if (platform === "instagram") {
+            results.instagram = await uploadToInstagram(
+              filePath,
+              platformCaptions.instagram,
+              cloudinaryResult?.url
+            );
+            await notifyWhatsAppOnSuccess(scheduledDoc, 'Instagram', results.instagram);
+          } else if (platform === "tiktok") {
+            results.tiktok = await uploadToTikTok(
+              filePath,
+              platformCaptions.tiktok
+            );
+            await notifyWhatsAppOnSuccess(scheduledDoc, 'TikTok', results.tiktok);
+          } else if (platform === "twitter") {
+            results.twitter = await uploadToTwitter(
+              filePath,
+              platformCaptions.twitter
+            );
+            await notifyWhatsAppOnSuccess(scheduledDoc, 'Twitter', results.twitter);
+          } else if (platform === "linkedin") {
+            results.linkedin = await uploadToLinkedIn(
+              filePath,
+              platformCaptions.linkedin,
+              cloudinaryResult?.url
+            );
+            await notifyWhatsAppOnSuccess(scheduledDoc, 'LinkedIn', results.linkedin);
+          }
+        }
+
+        const successCount = Object.values(results).filter(
+          (r) => r.success
+        ).length;
+        const totalCount = Object.keys(results).length;
+
+        console.log(
+          `✅ Scheduled distribution completed: ${successCount}/${totalCount} platforms successful`
+        );
+
+        // Update status in MongoDB
+        await ScheduledPost.findByIdAndUpdate(scheduledDoc._id, {
+          status: "completed",
+        });
+        scheduledTasks.delete(taskId);
+      });
+
+      res.json({
+        success: true,
+        scheduled: true,
+        message: `Post scheduled for ${new Date(
+          scheduleTime
+        ).toLocaleString()}`,
+        results: {},
+        scheduledId: scheduledDoc._id,
+      });
+    } else {
+      // Immediate distribution
+      const results = {};
+
+      for (const platform of platforms) {
+        console.log(`📤 Uploading to ${platform}...`);
+        if (platform === "facebook") {
+          results.facebook = await uploadToFacebook(
+            filePath,
+            platformCaptions.facebook,
+            cloudinaryResult?.url
+          );
+          await notifyWhatsAppOnSuccess(null, 'Facebook', results.facebook);
+        } else if (platform === "instagram") {
+          results.instagram = await uploadToInstagram(
+            filePath,
+            platformCaptions.instagram,
+            cloudinaryResult?.url
+          );
+          await notifyWhatsAppOnSuccess(null, 'Instagram', results.instagram);
+        } else if (platform === "tiktok") {
+          results.tiktok = await uploadToTikTok(
+            filePath,
+            platformCaptions.tiktok
+          );
+          await notifyWhatsAppOnSuccess(null, 'TikTok', results.tiktok);
+        } else if (platform === "twitter") {
+          results.twitter = await uploadToTwitter(
+            filePath,
+            platformCaptions.twitter
+          );
+          await notifyWhatsAppOnSuccess(null, 'Twitter', results.twitter);
+        } else if (platform === "linkedin") {
+          results.linkedin = await uploadToLinkedIn(
+            filePath,
+            platformCaptions.linkedin,
+            cloudinaryResult?.url
+          );
+          await notifyWhatsAppOnSuccess(null, 'LinkedIn', results.linkedin);
+        }
+      }
+
+      const successCount = Object.values(results).filter(
+        (r) => r.success
+      ).length;
+      const totalCount = Object.keys(results).length;
+
+      console.log(
+        `✅ Distribution completed: ${successCount}/${totalCount} platforms successful`
+      );
+
+      res.json({
+        success: successCount > 0,
+        message: `Distribution completed: ${successCount}/${totalCount} platforms successful`,
+        results: results,
+      });
+    }
+  } catch (error) {
+    console.error("❌ Distribution error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Distribution failed",
+      details: error.message,
+    });
+  } finally {
+    isUploading = false;
+  }
 });
 
 // Distribute to selected platforms
