@@ -1144,28 +1144,33 @@ app.post("/distribute", async (req, res) => {
               platformCaptions.facebook,
               cloudinaryResult?.url
             );
+            await notifyWhatsAppOnSuccess(scheduledDoc, 'Facebook', results.facebook);
           } else if (platform === "instagram") {
             results.instagram = await uploadToInstagram(
               filePath,
               platformCaptions.instagram,
               cloudinaryResult?.url
             );
+            await notifyWhatsAppOnSuccess(scheduledDoc, 'Instagram', results.instagram);
           } else if (platform === "tiktok") {
             results.tiktok = await uploadToTikTok(
               filePath,
               platformCaptions.tiktok
             );
+            await notifyWhatsAppOnSuccess(scheduledDoc, 'TikTok', results.tiktok);
           } else if (platform === "twitter") {
             results.twitter = await uploadToTwitter(
               filePath,
               platformCaptions.twitter
             );
+            await notifyWhatsAppOnSuccess(scheduledDoc, 'Twitter', results.twitter);
           } else if (platform === "linkedin") {
             results.linkedin = await uploadToLinkedIn(
               filePath,
               platformCaptions.linkedin,
               cloudinaryResult?.url
             );
+            await notifyWhatsAppOnSuccess(scheduledDoc, 'LinkedIn', results.linkedin);
           }
         }
 
@@ -1206,28 +1211,33 @@ app.post("/distribute", async (req, res) => {
             platformCaptions.facebook,
             cloudinaryResult?.url
           );
+          await notifyWhatsAppOnSuccess(null, 'Facebook', results.facebook);
         } else if (platform === "instagram") {
           results.instagram = await uploadToInstagram(
             filePath,
             platformCaptions.instagram,
             cloudinaryResult?.url
           );
+          await notifyWhatsAppOnSuccess(null, 'Instagram', results.instagram);
         } else if (platform === "tiktok") {
           results.tiktok = await uploadToTikTok(
             filePath,
             platformCaptions.tiktok
           );
+          await notifyWhatsAppOnSuccess(null, 'TikTok', results.tiktok);
         } else if (platform === "twitter") {
           results.twitter = await uploadToTwitter(
             filePath,
             platformCaptions.twitter
           );
+          await notifyWhatsAppOnSuccess(null, 'Twitter', results.twitter);
         } else if (platform === "linkedin") {
           results.linkedin = await uploadToLinkedIn(
             filePath,
             platformCaptions.linkedin,
             cloudinaryResult?.url
           );
+          await notifyWhatsAppOnSuccess(null, 'LinkedIn', results.linkedin);
         }
       }
 
@@ -1284,8 +1294,8 @@ app.post("/process-transcript", async (req, res) => {
     // Use Deepgram API for transcription via axios
     const deepgramApiKey = process.env.DEEPGRAM_API_KEY;
     if (!deepgramApiKey) {
-      return res.status(500).json({
-        success: false,
+          return res.status(500).json({
+            success: false,
         error: "Deepgram API key not set in environment (DEEPGRAM_API_KEY)",
       });
     }
@@ -1307,45 +1317,45 @@ app.post("/process-transcript", async (req, res) => {
       console.log("Transcription completed successfully");
     } catch (dgError) {
       console.error("Deepgram transcription error:", dgError.response?.data || dgError.message);
-      return res.status(500).json({
-        success: false,
+        return res.status(500).json({
+          success: false,
         error: "Transcription failed: " + (dgError.response?.data?.err_msg || dgError.message),
       });
     }
 
-    // Generate content for all platforms
-    let content = {};
-    if (geminiService) {
-      try {
+          // Generate content for all platforms
+          let content = {};
+          if (geminiService) {
+            try {
         content = await geminiService.generateAllPlatformContent(transcript.trim());
-      } catch (geminiError) {
+            } catch (geminiError) {
         console.error("❌ Gemini content generation failed:", geminiError.message);
-        // Fallback to basic content
-        content = {
-          facebook: `🎥 ${transcript.trim().substring(0, 200)}...`,
-          instagram: `🎬 ${transcript.trim().substring(0, 150)}...`,
-          tiktok: `🔥 ${transcript.trim().substring(0, 100)}...`,
-          twitter: `📱 ${transcript.trim().substring(0, 280)}...`,
-          linkedin: `📝 ${transcript.trim().substring(0, 200)}...`,
-        };
-      }
-    } else {
-      // Fallback to basic content if Gemini is not available
-      content = {
-        facebook: `🎥 ${transcript.trim().substring(0, 200)}...`,
-        instagram: `🎬 ${transcript.trim().substring(0, 150)}...`,
-        tiktok: `🔥 ${transcript.trim().substring(0, 100)}...`,
-        twitter: `📱 ${transcript.trim().substring(0, 280)}...`,
-        linkedin: `📝 ${transcript.trim().substring(0, 200)}...`,
-      };
-    }
+              // Fallback to basic content
+              content = {
+                facebook: `🎥 ${transcript.trim().substring(0, 200)}...`,
+                instagram: `🎬 ${transcript.trim().substring(0, 150)}...`,
+                tiktok: `🔥 ${transcript.trim().substring(0, 100)}...`,
+                twitter: `📱 ${transcript.trim().substring(0, 280)}...`,
+                linkedin: `📝 ${transcript.trim().substring(0, 200)}...`,
+              };
+            }
+          } else {
+            // Fallback to basic content if Gemini is not available
+            content = {
+              facebook: `🎥 ${transcript.trim().substring(0, 200)}...`,
+              instagram: `🎬 ${transcript.trim().substring(0, 150)}...`,
+              tiktok: `🔥 ${transcript.trim().substring(0, 100)}...`,
+              twitter: `📱 ${transcript.trim().substring(0, 280)}...`,
+              linkedin: `📝 ${transcript.trim().substring(0, 200)}...`,
+            };
+          }
 
-    console.log("Content generation completed successfully");
+          console.log("Content generation completed successfully");
 
-    res.json({
-      success: true,
-      transcript: transcript.trim(),
-      content: content,
+          res.json({
+            success: true,
+            transcript: transcript.trim(),
+            content: content,
       transcriptFile: filename + ".txt",
     });
   } catch (error) {
@@ -1662,3 +1672,120 @@ initializeFolderMap().catch(console.error);
 setInterval(() => {
   watchFolderAndSubfolders().catch(console.error);
 }, 5000);
+
+// --- Catch-up job to post overdue scheduled posts ---
+setInterval(async () => {
+  try {
+    const now = new Date();
+    const overduePosts = await ScheduledPost.find({
+      status: "pending",
+      scheduledTime: { $lte: now },
+    });
+    for (const post of overduePosts) {
+      console.log(`⏰ Catch-up: Posting overdue scheduled post '${post.filename}' (${post._id})`);
+      const filePath = path.join(__dirname, "uploads", post.filename);
+      const platformCaptions = post.generatedContent || {};
+      const cloudinaryUrl = post.cloudinaryUrl;
+      const platforms = post.platforms || [];
+      const results = {};
+      for (const platform of platforms) {
+        try {
+          if (platform === "facebook") {
+            results.facebook = await uploadToFacebook(filePath, platformCaptions.facebook, cloudinaryUrl);
+            await notifyWhatsAppOnSuccess(post, 'Facebook', results.facebook);
+          } else if (platform === "instagram") {
+            results.instagram = await uploadToInstagram(filePath, platformCaptions.instagram, cloudinaryUrl);
+            await notifyWhatsAppOnSuccess(post, 'Instagram', results.instagram);
+          } else if (platform === "tiktok") {
+            results.tiktok = await uploadToTikTok(filePath, platformCaptions.tiktok);
+            await notifyWhatsAppOnSuccess(post, 'TikTok', results.tiktok);
+          } else if (platform === "twitter") {
+            results.twitter = await uploadToTwitter(filePath, platformCaptions.twitter);
+            await notifyWhatsAppOnSuccess(post, 'Twitter', results.twitter);
+          } else if (platform === "linkedin") {
+            results.linkedin = await uploadToLinkedIn(filePath, platformCaptions.linkedin, cloudinaryUrl);
+            await notifyWhatsAppOnSuccess(post, 'LinkedIn', results.linkedin);
+          }
+        } catch (err) {
+          console.error(`❌ Error posting to ${platform}:`, err.message);
+        }
+      }
+      await ScheduledPost.findByIdAndUpdate(post._id, { status: "completed" });
+      console.log(`✅ Catch-up: Completed scheduled post '${post.filename}' (${post._id})`);
+    }
+  } catch (err) {
+    console.error("❌ Catch-up job error:", err);
+  }
+}, 5 * 60 * 1000); // every 5 minutes
+
+// --- Self-ping to prevent Render from sleeping ---
+setInterval(() => {
+  axios
+    .get("https://one0x-finale.onrender.com/test")
+    .then(() => console.log("🔄 Self-ping to prevent sleep"))
+    .catch((err) => console.warn("⚠️ Self-ping failed:", err.message));
+}, 5 * 60 * 1000); // every 5 minutes
+
+// --- Helper to send WhatsApp notification on successful post ---
+async function notifyWhatsAppOnSuccess(post, platform, result) {
+  if (result && result.success) {
+    const to = process.env.NOTIFY_WHATSAPP_NUMBER;
+    if (!to) return;
+    const message = `✅ Successfully posted '${post.filename}' to ${platform}. Post ID: ${result.id || 'N/A'}`;
+    await sendWhatsAppMessage(to, message);
+  }
+}
+
+// --- Daily health check and error report ---
+const HEALTH_CHECK_HOUR = 8; // 8:00 AM
+cron.schedule('0 8 * * *', async () => {
+  try {
+    let healthStatus = '✅ Server is running.';
+    let errorSummary = '';
+    // Check MongoDB connection
+    if (mongoose.connection.readyState !== 1) {
+      healthStatus = '❌ MongoDB is not connected!';
+      errorSummary += '\n- MongoDB connection issue.';
+    }
+    // Check if uploads directory exists
+    if (!fs.existsSync('uploads')) {
+      errorSummary += '\n- uploads/ directory is missing.';
+    }
+    // Check for pending scheduled posts that are overdue
+    const now = new Date();
+    const overduePosts = await ScheduledPost.find({
+      status: 'pending',
+      scheduledTime: { $lte: now },
+    });
+    if (overduePosts.length > 0) {
+      errorSummary += `\n- ${overduePosts.length} scheduled post(s) are overdue.`;
+    }
+    // Check for recent errors in a simple error log file (if exists)
+    let recentErrors = '';
+    const errorLogPath = 'error.log';
+    if (fs.existsSync(errorLogPath)) {
+      const logContent = fs.readFileSync(errorLogPath, 'utf-8');
+      const lines = logContent.trim().split('\n');
+      recentErrors = lines.slice(-10).join('\n'); // last 10 errors
+      if (recentErrors) {
+        errorSummary += `\n- Recent errors:\n${recentErrors}`;
+      }
+    }
+    // Suggestion
+    let suggestion = '';
+    if (errorSummary) {
+      suggestion = '\nPlease check the server logs, MongoDB connection, and ensure all environment variables are set. Investigate overdue posts and errors above.';
+    } else {
+      suggestion = '\nNo issues detected. All systems operational.';
+    }
+    // Compose and send WhatsApp message
+    const to = process.env.NOTIFY_WHATSAPP_NUMBER;
+    if (to) {
+      const message = `🌅 Daily Health Check:\n${healthStatus}${errorSummary}${suggestion}`;
+      await sendWhatsAppMessage(to, message);
+    }
+    console.log('✅ Daily health check sent to WhatsApp.');
+  } catch (err) {
+    console.error('❌ Health check job error:', err);
+  }
+});

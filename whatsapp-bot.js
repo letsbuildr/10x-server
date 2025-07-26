@@ -1,4 +1,4 @@
-require('dotenv').config();
+git push -u origin mainrequire('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
