@@ -43,6 +43,27 @@ const scheduledPostSchema = new mongoose.Schema({
 });
 const ScheduledPost = mongoose.model("ScheduledPost", scheduledPostSchema);
 
+// Post schema for tracking uploads and distributions
+const postSchema = new mongoose.Schema({
+  filename: String,
+  platform: String,
+  status: { type: String, enum: ['success', 'failed', 'pending'], default: 'pending' },
+  error: String,
+  postId: String,
+  createdAt: { type: Date, default: Date.now },
+  data: mongoose.Schema.Types.Mixed,
+});
+const Post = mongoose.model("Post", postSchema);
+
+// Activity schema for mobile app analytics
+const activitySchema = new mongoose.Schema({
+  mobileId: String,
+  type: String,
+  timestamp: { type: Date, default: Date.now },
+  data: mongoose.Schema.Types.Mixed,
+});
+const Activity = mongoose.model("Activity", activitySchema);
+
 // Initialize Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME || "drfzrl9zj",
@@ -2140,5 +2161,235 @@ cron.schedule('0 8 * * *', async () => {
     console.log('✅ Daily health check sent to WhatsApp.');
   } catch (err) {
     console.error('❌ Health check job error:', err);
+  }
+});
+
+// --- Analytics Endpoints for Mobile App ---
+app.get("/analytics/posts", async (req, res) => {
+  try {
+    // Get posts from MongoDB
+    const posts = await Post.find({}).sort({ createdAt: -1 }).limit(100);
+    
+    const successful = posts.filter(post => post.status === 'success').length;
+    const failed = posts.filter(post => post.status === 'failed').length;
+    const total = posts.length;
+
+    // Group by date (last 7 days)
+    const byDate = {};
+    const last7Days = new Date();
+    last7Days.setDate(last7Days.getDate() - 7);
+
+    posts.forEach(post => {
+      const postDate = new Date(post.createdAt);
+      if (postDate >= last7Days) {
+        const dateKey = postDate.toDateString();
+        byDate[dateKey] = (byDate[dateKey] || 0) + 1;
+      }
+    });
+
+    // Platform stats
+    const platformStats = {};
+    posts.forEach(post => {
+      if (post.platform) {
+        platformStats[post.platform] = (platformStats[post.platform] || 0) + 1;
+      }
+    });
+
+    const platformArray = Object.entries(platformStats)
+      .map(([platform, count]) => ({ platform, count }))
+      .sort((a, b) => b.count - a.count);
+
+    // Recent posts
+    const recent = posts.slice(0, 10).map(post => ({
+      id: post._id,
+      type: post.status === 'success' ? 'post_success' : 'post_failure',
+      platform: post.platform,
+      filename: post.filename,
+      timestamp: post.createdAt,
+      data: {
+        platform: post.platform,
+        postId: post._id.toString(),
+        filename: post.filename
+      }
+    }));
+
+    res.json({
+      success: true,
+      total,
+      successful,
+      failed,
+      byDate,
+      platformStats: platformArray,
+      recent
+    });
+  } catch (error) {
+    console.error('Analytics posts error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch posts analytics'
+    });
+  }
+});
+
+app.get("/analytics/scheduled", async (req, res) => {
+  try {
+    const scheduledPosts = await ScheduledPost.find({}).sort({ scheduledTime: 1 });
+    const count = scheduledPosts.length;
+
+    res.json({
+      success: true,
+      count,
+      posts: scheduledPosts
+    });
+  } catch (error) {
+    console.error('Analytics scheduled error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch scheduled analytics'
+    });
+  }
+});
+
+app.get("/analytics/uploads", async (req, res) => {
+  try {
+    // Count files in uploads directory
+    const uploadsDir = path.join(__dirname, 'uploads');
+    let count = 0;
+    
+    if (fs.existsSync(uploadsDir)) {
+      const files = fs.readdirSync(uploadsDir);
+      count = files.filter(file => file.match(/\.(mp4|avi|mov|mkv)$/i)).length;
+    }
+
+    res.json({
+      success: true,
+      count
+    });
+  } catch (error) {
+    console.error('Analytics uploads error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch uploads analytics'
+    });
+  }
+});
+
+app.get("/analytics/success-rate", async (req, res) => {
+  try {
+    const posts = await Post.find({});
+    const successful = posts.filter(post => post.status === 'success').length;
+    const total = posts.length;
+
+    const successRate = total > 0 ? Math.round((successful / total) * 100) : 0;
+
+    res.json({
+      success: true,
+      successRate,
+      total,
+      successful
+    });
+  } catch (error) {
+    console.error('Analytics success rate error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch success rate'
+    });
+  }
+});
+
+app.get("/analytics/platforms", async (req, res) => {
+  try {
+    const posts = await Post.find({ status: 'success' });
+    
+    const platformStats = {};
+    posts.forEach(post => {
+      if (post.platform) {
+        platformStats[post.platform] = (platformStats[post.platform] || 0) + 1;
+      }
+    });
+
+    const platforms = Object.entries(platformStats)
+      .map(([platform, count]) => ({ platform, count }))
+      .sort((a, b) => b.count - a.count);
+
+    res.json({
+      success: true,
+      platforms
+    });
+  } catch (error) {
+    console.error('Analytics platforms error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch platform stats'
+    });
+  }
+});
+
+app.get("/analytics/recent", async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+    
+    // Get recent posts
+    const posts = await Post.find({}).sort({ createdAt: -1 }).limit(limit);
+    
+    const activities = posts.map(post => ({
+      id: post._id.toString(),
+      type: post.status === 'success' ? 'post_success' : 'post_failure',
+      timestamp: post.createdAt,
+      data: {
+        platform: post.platform,
+        postId: post._id.toString(),
+        filename: post.filename,
+        error: post.error
+      }
+    }));
+
+    res.json({
+      success: true,
+      activities
+    });
+  } catch (error) {
+    console.error('Analytics recent error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch recent activities'
+    });
+  }
+});
+
+app.post("/analytics/sync", async (req, res) => {
+  try {
+    const { activities } = req.body;
+    
+    // Store mobile activities in MongoDB for analytics
+    if (activities && Array.isArray(activities)) {
+      for (const activity of activities) {
+        // Check if activity already exists
+        const existing = await Activity.findOne({ 
+          mobileId: activity.id,
+          type: activity.type 
+        });
+        
+        if (!existing) {
+          await Activity.create({
+            mobileId: activity.id,
+            type: activity.type,
+            timestamp: activity.timestamp,
+            data: activity.data
+          });
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Activities synced successfully'
+    });
+  } catch (error) {
+    console.error('Analytics sync error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to sync activities'
+    });
   }
 });
