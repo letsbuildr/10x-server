@@ -2076,8 +2076,16 @@ async function notifyWhatsAppOnSuccess(post, platform, result) {
   if (result && result.success) {
     const to = process.env.NOTIFY_WHATSAPP_NUMBER;
     if (!to) return;
-    const message = `✅ Successfully posted '${post.filename}' to ${platform}. Post ID: ${result.id || 'N/A'}`;
-    await sendWhatsAppMessage(to, message);
+    
+    // Safely get filename from post object or result
+    const filename = post?.filename || result?.filename || 'Unknown file';
+    const message = `✅ Successfully posted '${filename}' to ${platform}. Post ID: ${result.id || 'N/A'}`;
+    
+    try {
+      await sendWhatsAppMessage(to, message);
+    } catch (error) {
+      console.error('❌ WhatsApp notification failed:', error.message);
+    }
   }
 }
 
