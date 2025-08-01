@@ -1954,9 +1954,36 @@ async function handleNewDriveVideo(file, folder) {
         `⚠️ Transcript/caption generation error, using folder name as fallback.`
       );
     }
-    // 4. Generate unique folder ID
+    // 4. Always create a pending ScheduledPost (no scheduledTime yet)
+    let platforms = [];
+    if (/tiktok/i.test(folder.name) && /instagram/i.test(folder.name)) {
+      platforms = ["tiktok", "instagram"];
+    } else if (/tiktok/i.test(folder.name)) {
+      platforms = ["tiktok"];
+    } else if (/instagram/i.test(folder.name)) {
+      platforms = ["instagram"];
+    } else {
+      platforms = ["facebook", "instagram", "tiktok", "twitter", "linkedin"];
+    }
+    function extractHashtags(text) {
+      return (text.match(/#\w+/g) || []).map((tag) => tag.toLowerCase());
+    }
+    const hashtags = extractHashtags(
+      captions.facebook || captions.tiktok || ""
+    );
+    const scheduledDoc = await ScheduledPost.create({
+      filename: file.name,
+      caption: captions.facebook || captions.tiktok || folder.name,
+      cloudinaryUrl: cloudinaryResult.url,
+      platforms,
+      hashtags,
+      status: "pending",
+      generatedContent: captions,
+      scheduledTime: null, // Not scheduled yet
+    });
+    // 5. Generate unique folder ID
     const uniqueId = generateUniqueFolderId(folder.name);
-    // 5. Compose WhatsApp message
+    // 6. Compose WhatsApp message
     console.log(`✉️  Preparing WhatsApp message...`);
     let message = `New Uploaded file: ${file.name}\nOur Unique ID for the folder ${folder.name}: ${uniqueId}\nCaption generated:\n`;
     if (/tiktok/i.test(folder.name) && /instagram/i.test(folder.name)) {
@@ -1973,7 +2000,7 @@ async function handleNewDriveVideo(file, folder) {
       }\n`;
     }
     message += `What time would you like to post it? (Reply in DD/MM/YYYY HH:mm am/pm format)`;
-    // 6. Store pending info for later scheduling (in-memory or DB, as needed)
+    // 7. Store pending info for later scheduling (in-memory or DB, as needed)
     global.lastDriveUpload = {
       fileName: file.name,
       cloudinaryUrl: cloudinaryResult.url,
